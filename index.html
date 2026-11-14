@@ -54,6 +54,7 @@ h2{font-size:clamp(28px,6vw,44px)}
 .cta{display:flex;gap:10px;flex-wrap:wrap}
 .mapPick{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .card .friendNote{margin:-6px 0 0;font-size:13px;color:var(--muted)}
+.card .onlineNote{margin:6px 0 0;color:#8fe3a8}
 .waitBar{position:absolute;left:50%;transform:translateX(-50%);bottom:max(12px,env(safe-area-inset-bottom,0px));display:flex;gap:12px;align-items:center;background:rgba(18,23,46,.94);border:1px solid var(--line);border-radius:8px;padding:8px 8px 8px 14px;width:max-content;max-width:calc(100% - 32px);font-size:14px;line-height:1.4}
 .mapPick label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--gold)}
 .mapPick select{font-family:var(--ui);font-weight:600;font-size:15px;color:var(--ink);background:#1c2344;border:1px solid var(--line);border-radius:6px;padding:8px 10px}
@@ -158,8 +159,10 @@ body.touch #weapons .wpn{flex-direction:column;justify-content:center;gap:2px;mi
           <button id="playHot">2 players, one device</button>
           <button id="playFriend" disabled>Play a friend</button>
           <button id="friendAlt" hidden>Start over</button>
+          <button id="friendCopy" hidden>Copy invite link</button>
         </div>
         <p class="friendNote" id="friendNote">Checking for a game with a friend…</p>
+        <p class="friendNote onlineNote" id="onlineNote" hidden></p>
         <details class="howto">
           <summary>How to play</summary>
           <p class="keys touchKeys">Drag on the battlefield to aim. Hold <b>Fire</b> and let go to shoot. ◀ ▶ walk, <b>Jump</b> jumps, ▲ ▼ fine-tune the aim. Pinch to zoom. The weapon button in the middle opens all weapons.</p>
@@ -182,7 +185,7 @@ body.touch #weapons .wpn{flex-direction:column;justify-content:center;gap:2px;mi
       </div>
     </div>
 
-    <div class="waitBar" id="waitBar" hidden><span id="waitText"></span><button id="waitMenu">Menu</button></div>
+    <div class="waitBar" id="waitBar" hidden><span id="waitText"></span><button id="waitCopy" hidden>Copy invite link</button><button id="waitMenu">Menu</button></div>
 
     <div class="overlay" id="over" hidden>
       <div class="card">
@@ -1709,6 +1712,7 @@ function newGame(m) {
   mode = m; sfx.init(); voice.init();
   setupMap();
   showBanner(`${biome.name} · ${WEATHER_LABEL[weatherKind]}`, '#ffcf7a');
+  logPlay(m);
   ammo = [0, 1].map(() => ({ napalm: 2, cluster: 2, airstrike: 1, nuke: 1, bat: 2, airburst: 2, zap: 1 }));
   weapon = ['rocket', 'rocket'];
   cursor = [-1, -1]; team = 1; turn = 0;
@@ -3589,6 +3593,7 @@ function frame(now) {
 const net = { db: null, user: null, me: null, writer: false, ref: null, game: null, myTeam: -1, applied: 0, status: 'connecting', confirm: false };
 let rec = null, replay = null, turnStartHp = null;
 const $ = id => document.getElementById(id);
+const shareWhat = () => (net.backend === 'sb' ? 'the invite link' : 'this artifact');
 
 function recEvent(e) { if (rec && rec.ev.length < 700) { e.t = +(time - rec.t0).toFixed(2); rec.ev.push(e); } }
 
@@ -3686,10 +3691,13 @@ function startMyTurn() {
 function waitText() {
   const g = net.game;
   if (mode === 'watch') return `Watching: ${TEAMS[team].name} to move.`;
-  if (g && !(g.players || [])[1]) return 'Waiting for a friend to join and play Frost. Send them this artifact.';
+  if (g && !(g.players || [])[1]) return `Waiting for a friend to join and play Frost. Send them ${shareWhat()}.`;
   return `Waiting for ${TEAMS[team].name} to move. You can close this page and come back later.`;
 }
-function setWaitBar(text) { const el = $('waitBar'); el.hidden = !text; if (text) $('waitText').textContent = text; }
+function setWaitBar(text) {
+  const el = $('waitBar'); el.hidden = !text; if (text) $('waitText').textContent = text;
+  $('waitCopy').hidden = !(text && net.backend === 'sb' && mode === 'friend' && net.game && !(net.game.players || [])[1]);
+}
 
 // replay the other player's turn from its recording: tracers along shot paths, blasts where things exploded
 function startReplay(ev, then) {
@@ -3745,11 +3753,13 @@ function onGame(snap) {
 }
 
 async function renderLobby() {
-  const btn = $('playFriend'), alt = $('friendAlt'), note = $('friendNote');
-  alt.hidden = true; net.confirm = false;
+  const btn = $('playFriend'), alt = $('friendAlt'), note = $('friendNote'), sbm = net.backend === 'sb';
+  alt.hidden = true; net.confirm = false; $('friendCopy').hidden = true;
   if (net.status !== 'ready') {
     btn.disabled = true;
-    note.textContent = net.status === 'connecting' ? 'Checking for a game with a friend…' : 'Playing a friend works when this game is open on claude.ai and you are signed in.';
+    note.textContent = net.status === 'connecting' ? 'Checking for a game with a friend…'
+      : sbm ? 'Online play is not available right now. Check your connection, then reload the page.'
+      : 'Playing a friend works when this game is open on claude.ai and you are signed in.';
     return;
   }
   const g = net.game, players = (g && g.players) || [];
@@ -3759,13 +3769,14 @@ async function renderLobby() {
   const meIdx = players.indexOf(net.me);
   btn.disabled = false;
   if (!g || g.status === 'over' || !g.state) {
-    btn.dataset.act = 'new'; btn.textContent = 'Play a friend'; btn.disabled = !net.writer;
-    note.textContent = net.writer ? 'Start a game, then send your friend this artifact. You each take your turn whenever you like.'
+    btn.dataset.act = 'new'; btn.textContent = sbm ? 'Play a friend online' : 'Play a friend'; btn.disabled = !net.writer;
+    note.textContent = net.writer ? `Start a game, then send your friend ${shareWhat()}. Play live, or take your turns whenever you like.`
       : 'Only people who can edit this artifact can play. Ask its owner to invite you as an Editor.';
   } else if (meIdx >= 0) {
     btn.dataset.act = 'resume'; btn.textContent = g.team === meIdx ? 'Resume game · your turn' : 'Resume game';
-    note.textContent = players[1] ? `You play ${TEAMS[meIdx].name} against ${nm(players[1 - meIdx])}.` : 'Waiting for a friend to join. Send them this artifact.';
-    if (net.writer) { alt.hidden = false; alt.textContent = 'Start over'; }
+    note.textContent = players[1] ? `You play ${TEAMS[meIdx].name} against ${nm(players[1 - meIdx])}.` : `Waiting for a friend to join. Send them ${shareWhat()}.`;
+    if (net.writer) { alt.hidden = false; alt.textContent = sbm ? 'Start a new game' : 'Start over'; }
+    if (sbm && !players[1]) $('friendCopy').hidden = false;
   } else if (!players[1] && net.writer) {
     btn.dataset.act = 'join'; btn.textContent = `Join ${nm(players[0])}'s game`;
     note.textContent = 'You will play Frost.';
@@ -3794,11 +3805,20 @@ async function createFriendGame() {
   weapon = ['rocket', 'rocket']; cursor = [-1, -1]; team = 1; turn = 0;
   $('title').hidden = true; $('over').hidden = true;
   net.game = { players: [net.me, null] };
+  if (net.backend === 'sb') openSbGame(newCode(), true);
+  logPlay('online');
   nextTurn();
   startMyTurn();
   await uploadTurn({ status: 'open' }); // the map exists for a friend to join before you finish your first turn
 }
 async function joinGame() {
+  if (net.backend === 'sb') {
+    const { data, error } = await sb.client.rpc('join_game', { game_code: sb.code });
+    if (error || !data) { $('friendNote').textContent = 'Could not join: this match is already full or finished.'; return; }
+    sb.exists = true; net.game = gameFromRow(data);
+    enterFriendGame(1); logPlay('online');
+    return;
+  }
   try {
     const lease = await net.ref.acquire({ holder: net.me, ttlMs: 5000 });
     if (!lease.acquired) { $('friendNote').textContent = 'Someone else is joining right now. Try again in a moment.'; return; }
@@ -3825,9 +3845,117 @@ function backToMenu() {
   setupMap(); state = 'title'; cur = null; updateUI(); renderLobby();
 }
 
-async function initNet() {
+// ---------- online play anywhere else (GitHub Pages, itch.io, …): Supabase ----------
+// Each player is an anonymous Supabase user. A match is one row in "games", found by the 6-letter code in
+// the invite link (?game=K7QXWB). Database rules only let the two players in a match change it.
+// The publishable key is meant to be public; what it can do is limited by those rules.
+const SB_URL = 'https://jsdglsljfcafydfhsajl.supabase.co', SB_KEY = 'sb_publishable_0INjutzwvrAWGrll6JlctA_JAvAIjk4';
+const SB_LIB = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js';
+const sb = { client: null, code: null, chan: null, exists: false, lobby: null };
+const CODE_CH = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+function newCode() { let c = ''; for (const b of crypto.getRandomValues(new Uint8Array(6))) c += CODE_CH[b % CODE_CH.length]; return c; }
+function inviteLink() { return location.origin + location.pathname + '?game=' + sb.code; }
+function loadScript(src) {
+  return new Promise((ok, fail) => { const el = document.createElement('script'); el.src = src; el.onload = ok; el.onerror = fail; document.head.appendChild(el); });
+}
+function gameFromRow(row) {
+  if (!row) return null;
+  const { players, ...d } = row.data || {};
+  return { ...d, players: [row.p0, row.p1 || null], status: row.p1 && row.status === 'open' ? 'active' : row.status, turn: row.turn };
+}
+function sbRef(code) {
+  const ref = {
+    async get() {
+      const { data, error } = await sb.client.from('games').select('*').eq('code', code).maybeSingle();
+      if (error) throw error;
+      if (data) sb.exists = true;
+      const g = gameFromRow(data);
+      return { exists: !!g, data: () => g };
+    },
+    async set(body) {
+      const { players, ...data } = body, row = { data, status: body.status, turn: body.turn };
+      const { error } = sb.exists ? await sb.client.from('games').update(row).eq('code', code)
+        : await sb.client.from('games').insert({ code, p0: net.me, ...row });
+      if (error) throw error;
+      sb.exists = true;
+    },
+    onSnapshot(cb) {
+      // the change event only says "something moved"; the row is fetched fresh, since a battlefield is too big to ride along
+      let busy = false, again = false;
+      const fire = async () => {
+        if (busy) { again = true; return; }
+        busy = true;
+        try { if (sb.code === code) cb(await ref.get()); } catch (e) {}
+        busy = false;
+        if (again) { again = false; fire(); }
+      };
+      ref.fire = fire;
+      if (sb.chan) sb.client.removeChannel(sb.chan);
+      sb.chan = sb.client.channel('game-' + code)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'games', filter: 'code=eq.' + code }, fire)
+        .subscribe(st => { if (st === 'SUBSCRIBED') fire(); });
+      fire();
+    },
+  };
+  return ref;
+}
+function openSbGame(code, fresh) {
+  sb.code = code; sb.exists = false;
+  net.ref = sbRef(code); net.ref.onSnapshot(onGame);
+  lsSet('dm.lastGame', code);
+  if (fresh || new URLSearchParams(location.search).get('game') !== code) history.replaceState(null, '', '?game=' + code);
+}
+function logPlay(m) {
+  if (net.backend !== 'sb' || !sb.client) return;
+  sb.client.from('plays').insert({ mode: m, biome: biomeKey }).then(() => {}, () => {});
+}
+function joinPresence() {
+  // everyone with the game open joins one channel; its member list is the "players online" count
+  sb.lobby = sb.client.channel('online', { config: { presence: { key: net.me } } });
+  sb.lobby.on('presence', { event: 'sync' }, () => {
+    const n = Object.keys(sb.lobby.presenceState()).length, el = $('onlineNote');
+    el.hidden = !n;
+    el.textContent = n <= 1 ? '● Only you online right now' : `● ${n} players online`;
+  }).subscribe(st => { if (st === 'SUBSCRIBED') sb.lobby.track({ at: Date.now() }); });
+}
+async function initSupabase() {
+  net.backend = 'sb';
   try {
-    if (!window.claude || typeof window.claude.use !== 'function') throw new Error('no viewer');
+    if (!window.supabase) await loadScript(SB_LIB);
+    sb.client = window.supabase.createClient(SB_URL, SB_KEY);
+    let { data: { session } } = await sb.client.auth.getSession();
+    if (!session) {
+      const r = await sb.client.auth.signInAnonymously();
+      if (r.error) throw r.error;
+      session = r.data.session;
+    }
+    net.me = session.user.id; net.writer = true; net.user = { profiles: async () => ({}) };
+    net.status = 'ready';
+    joinPresence();
+    const code = (new URLSearchParams(location.search).get('game') || lsGet('dm.lastGame') || '').toUpperCase();
+    if (/^[A-Z2-9]{6}$/.test(code)) openSbGame(code);
+    // a phone that slept may have missed a move: look again when the page comes back
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && net.ref && net.ref.fire) net.ref.fire(); });
+  } catch (e) {
+    console.warn('online play unavailable:', e);
+    net.status = 'unavailable';
+  }
+  if (state === 'title') renderLobby();
+}
+async function copyInvite(btn) {
+  const link = inviteLink();
+  try {
+    if (TOUCH && navigator.share) { await navigator.share({ title: 'Dyna-Mites', text: 'Play me in Dyna-Mites!', url: link }); return; }
+    await navigator.clipboard.writeText(link);
+    const old = btn.textContent; btn.textContent = 'Link copied'; setTimeout(() => { btn.textContent = old; }, 1600);
+  } catch (e) { prompt('Send this link to your friend:', link); }
+}
+
+async function initNet() {
+  if (!window.claude || typeof window.claude.use !== 'function') { await initSupabase(); return; }
+  try {
     const [db, user] = await Promise.all([window.claude.use('db'), window.claude.use('user')]);
     if (!db || !user) throw new Error('db or user unavailable');
     net.db = db; net.user = user; net.me = await user.id();
@@ -3984,6 +4112,8 @@ document.getElementById('biomeSel').addEventListener('change', e => { biomeChoic
 document.getElementById('again').addEventListener('click', () => (mode === 'friend' ? createFriendGame() : newGame(mode === 'watch' ? 'hot' : mode)));
 document.getElementById('menu').addEventListener('click', backToMenu);
 $('waitMenu').addEventListener('click', backToMenu);
+$('waitCopy').addEventListener('click', e => copyInvite(e.currentTarget));
+$('friendCopy').addEventListener('click', e => copyInvite(e.currentTarget));
 $('playFriend').addEventListener('click', () => {
   const act = $('playFriend').dataset.act;
   if (act === 'new') createFriendGame();
