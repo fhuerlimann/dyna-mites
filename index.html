@@ -326,8 +326,25 @@ function fbm(x, y, oct) {
 // ---------- sound ----------
 const sfx = {
   ctx: null, muted: false,
-  init() { if (this.ctx) { this.wake(); return; } try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { this.ctx = null; } },
-  wake() { const c = this.ctx; if (c && c.state !== 'running' && c.state !== 'closed') c.resume().catch(() => {}); },
+  init() {
+    if (!this.ctx || this.ctx.state === 'closed') {
+      // iPhone: play through the silent switch, like a game should (Safari 16.4+)
+      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+      try { this.ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { this.ctx = null; }
+      this.unlocked = false;
+    }
+    this.wake();
+  },
+  // Browsers only let sound start from a tap, click or key press, and pause it again when the tab is hidden,
+  // the phone locks or headphones change ("suspended" or Safari's "interrupted"). Every input calls this.
+  wake() {
+    const c = this.ctx; if (!c) return;
+    if (c.state !== 'running' && c.state !== 'closed') c.resume().catch(() => {});
+    if (!this.unlocked) {
+      // older iPhones stay silent until a sound actually plays inside a tap: play one silent sample
+      try { const s = c.createBufferSource(); s.buffer = c.createBuffer(1, 1, 22050); s.connect(c.destination); s.start(0); this.unlocked = true; } catch (e) {}
+    }
+  },
   noise(dur, freq, vol) {
     const c = this.ctx; if (!c || this.muted) return;
     const len = Math.max(1, (c.sampleRate * dur) | 0), buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
@@ -3905,7 +3922,7 @@ function openSbGame(code, fresh) {
   sb.code = code; sb.exists = false;
   net.ref = sbRef(code); net.ref.onSnapshot(onGame);
   lsSet('dm.lastGame', code);
-  if (fresh || new URLSearchParams(location.search).get('game') !== code) history.replaceState(null, '', '?game=' + code);
+  if (fresh) history.replaceState(null, '', '?game=' + code);
 }
 function logPlay(m) {
   if (net.backend !== 'sb' || !sb.client) return;
@@ -4100,6 +4117,9 @@ function setOverview(v) { overview = v; mapBtn.setAttribute('aria-pressed', Stri
 mapBtn.addEventListener('click', () => setOverview(!overview));
 window.addEventListener('keydown', e => { if (e.code === 'KeyM' && !e.repeat) setOverview(!overview); });
 
+// any tap, click or key press (re)starts sound, so it comes back after a phone lock, a tab switch,
+// or a game that began without a fresh tap (joining an online match finishes after a network round trip)
+for (const t of ['pointerdown', 'touchend', 'keydown']) document.addEventListener(t, () => { sfx.init(); voice.init(); }, { capture: true, passive: true });
 const muteBtn = document.getElementById('muteBtn');
 muteBtn.addEventListener('click', () => {
   sfx.init(); sfx.muted = !sfx.muted;
